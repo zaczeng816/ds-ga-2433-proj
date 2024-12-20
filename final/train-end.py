@@ -4,15 +4,16 @@ import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 import numpy as np
-import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, String
+from sqlalchemy import Column, String, DateTime
+from datetime import datetime
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
+data = pd.read_csv('health_data.csv')
 
 DATABASE_URL = "mysql+pymysql://admin:pass123456@dms-final-24-instance-1.c9qk2w2o6mml.us-east-1.rds.amazonaws.com:3306/medicalData"
 
@@ -31,6 +32,85 @@ class UserLogin(Base):
     CID = Column(String(15), primary_key=True)
     Username = Column(String(50), nullable=False, unique=True)
     Password = Column(String(50), nullable=False)
+
+class CustomerData(Base):
+    __tablename__ = 'customer_data'
+
+    CID = Column(String(15), primary_key=True)
+    CLast = Column(String(50), nullable=False)
+    CFirst = Column(String(50), nullable=False)
+    CMiddle = Column(String(50), nullable=True)
+    CSuffix = Column(String(10), nullable=True)
+    CDOB = Column(DateTime, nullable=False)
+    CSalutation = Column(String(10), nullable=True)
+    CEmailAddress = Column(String(100), nullable=False, unique=True)
+    Gender = Column(String(1), nullable=False)
+    SSN_TIN = Column(String(9), nullable=False, unique=True)
+    SSNType = Column(String(10), nullable=True)
+    PreferredLanguage = Column(String(20), nullable=True)
+    StartDate = Column(DateTime, nullable=False)
+    EndDate = Column(DateTime, nullable=True)
+    CreatedAt = Column(DateTime, default=datetime.now, nullable=False)
+    UpdatedAt = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+
+@app.route('/get_profile', methods=['GET'])
+def get_profile():
+    try:
+        cid = request.args.get('CID')
+        if not cid:
+            return jsonify({"error": "CID is required"}), 400
+
+        user = session.query(CustomerData).filter_by(CID=cid).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        user_info = {
+            "CID": user.CID,
+            "CLast": user.CLast,
+            "CFirst": user.CFirst,
+            "CMiddle": user.CMiddle,
+            "CSuffix": user.CSuffix,
+            "CDOB": user.CDOB.strftime('%Y-%m-%d') if user.CDOB else None,
+            "CSalutation": user.CSalutation,
+            "CEmailAddress": user.CEmailAddress,
+            "Gender": user.Gender,
+            "SSN_TIN": user.SSN_TIN,
+            "SSNType": user.SSNType,
+            "PreferredLanguage": user.PreferredLanguage,
+            "StartDate": user.StartDate.strftime('%Y-%m-%d') if user.StartDate else None,
+            "EndDate": user.EndDate.strftime('%Y-%m-%d') if user.EndDate else None,
+            "CreatedAt": user.CreatedAt.strftime('%Y-%m-%d %H:%M:%S'),
+            "UpdatedAt": user.UpdatedAt.strftime('%Y-%m-%d %H:%M:%S')
+        }
+
+        return jsonify(user_info), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/update_profile', methods=['POST'])
+def update_profile():
+    try:
+        updated_data = request.json
+        if not updated_data or 'CID' not in updated_data:
+            return jsonify({"error": "CID is required"}), 400
+
+        user = session.query(CustomerData).filter_by(CID=updated_data['CID']).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        for key, value in updated_data.items():
+            if hasattr(user, key):
+                setattr(user, key, value)
+
+        session.commit()
+
+        return jsonify({"message": "Profile updated successfully!", "updated_profile": updated_data}), 200
+    except Exception as e:
+        session.rollback()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/login', methods=['POST'])
@@ -52,13 +132,12 @@ def match_password():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
 
 @app.route('/train', methods=['POST'])
 def train_model():
     global model, features
     try:
-        file = request.files['file']
-        data = pd.read_json(file)
 
         features = [
             'healthCheckup_vitalSigns_bmi',
@@ -116,7 +195,10 @@ def predict():
             if feature not in input_df.columns:
                 input_df[feature] = 0
 
-        prediction = model.predict(input_df[features])[0]
+        # Ensure all feature columns are of type float
+        input_df[features] = input_df[features].astype(float)
+
+        prediction = round(float(model.predict(input_df[features])[0]), 2)
 
         return jsonify({"prediction": prediction})
     except Exception as e:
